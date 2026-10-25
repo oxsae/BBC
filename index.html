@@ -9,7 +9,13 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="assets/style.css">
+  <script>
+    // VERSI: naikkan angka ini setiap kali app.js / style.css / demo-data.js diganti,
+    // supaya browser semua pengguna langsung memuat file terbaru (bukan versi lama di cache).
+    window.BBC_VERSI = '2026.10.25-1';
+    document.write('<link rel="stylesheet" href="assets/style.css?v=' + window.BBC_VERSI + '">');
+  </script>
+  <noscript><link rel="stylesheet" href="assets/style.css"></noscript>
 </head>
 <body>
   <!-- Login -->
@@ -65,8 +71,22 @@
   <div id="tip" class="tip" role="tooltip" hidden></div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
-  <script src="assets/config.js"></script>
-  <script src="assets/demo-data.js"></script>
-  <script src="assets/app.js"></script>
+  <script>
+    // config.js selalu diambil versi terbaru (ditambah penanda waktu), file lain memakai BBC_VERSI.
+    (function () {
+      var v = window.BBC_VERSI;
+      var daftar = ['assets/config.js?t=' + Date.now(), 'assets/demo-data.js?v=' + v, 'assets/app.js?v=' + v];
+      (function muat(i) {
+        if (i >= daftar.length) return;
+        var s = document.createElement('script');
+        s.src = daftar[i];
+        s.onload = function () { muat(i + 1); };
+        s.onerror = function () {
+          document.body.insertAdjacentHTML('afterbegin', '<p style="padding:16px;color:#d03b3b">Gagal memuat ' + daftar[i].split('?')[0] + '. Periksa koneksi lalu muat ulang halaman.</p>');
+        };
+        document.body.appendChild(s);
+      })(0);
+    })();
+  </script>
 </body>
 </html>
