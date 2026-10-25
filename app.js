@@ -93,17 +93,25 @@
       var sel = $('#sel-bulan');
       sel.innerHTML = m.bulan.slice().reverse().map(function (b) { return '<option value="' + b + '">' + namaBulan(b) + '</option>'; }).join('');
       if (!m.bulan.length) { status('Belum ada data. Admin perlu mengisi FOLDER_ID lalu menjalankan sinkronisasi di spreadsheet backend.'); return; }
-      S.bulan = store('bbc_bulan') && m.bulan.indexOf(store('bbc_bulan')) >= 0 ? store('bbc_bulan') : m.bulan[m.bulan.length - 1];
+      var tersimpan = store('bbc_bulan') && m.bulan.indexOf(store('bbc_bulan')) >= 0;
+      S.bulan = tersimpan ? store('bbc_bulan') : m.bulan[m.bulan.length - 1];
       sel.value = S.bulan;
       $('#foot').textContent = 'Data diambil dari Google Sheets, terakhir disinkronkan ' + waktu(m.sinkron_terakhir) + '.';
-      return muatBulan(S.bulan);
+      return muatBulan(S.bulan, !tersimpan);
     }).catch(function (err) { if (err.message !== 'AUTH') status('Gagal memuat data: ' + err.message); });
   }
 
-  function muatBulan(b) {
+  /** cariMundur: saat pertama dibuka, lompat ke bulan terakhir yang sudah punya data produksi. */
+  function muatBulan(b, cariMundur) {
     S.bulan = b; store('bbc_bulan', b);
     var lanjut = function () {
       var d = S.data[b];
+      var iB = S.meta.bulan.indexOf(b);
+      if (cariMundur && !d.produksi.length && iB > 0) {
+        $('#sel-bulan').value = S.meta.bulan[iB - 1];
+        muatBulan(S.meta.bulan[iB - 1], true);
+        return;
+      }
       var hariAda = {};
       d.produksi.forEach(function (r) { hariAda[r.tanggal] = 1; });
       d.pengiriman.forEach(function (r) { hariAda[r.tanggal] = 1; });
@@ -170,6 +178,7 @@
     var kapSd = jamSd ? olahSd / jamSd / 1000 : null;
     var rcpo = rend(h.cpo, h.tbs_olah), rpk = rend(h.pk, h.tbs_olah);
     function kirimProduk(rows, p) { return sum(rows.filter(function (r) { return r.produk === p; }), 'tonase'); }
+    var adaJam = d.produksi.some(function (r) { return n(r.jam_olah); });   // format Real Produksi tidak memuat jam olah
 
     var html = '<div class="page-head"><h1>' + (S.hari ? tglPanjang(S.hari) : namaBulan(S.bulan)) + '</h1>' +
       '<span class="muted">Hari ini dibanding akumulasi 1–' + (S.hari ? +S.hari.slice(8) : '') + ' ' + BLN[+S.bulan.slice(5) - 1] + '</span></div>';
@@ -177,14 +186,17 @@
     // Neraca TBS
     if (h.tanggal) {
       var tersedia = n(h.tersedia) || 0, olahW = tersedia ? Math.max(4, h.tbs_olah / tersedia * 100) : 0;
+      var adaSisa = n(h.tersedia) !== null && n(h.sisa_akhir) !== null;
       html += '<section class="flow" aria-label="Neraca TBS hari ini">' +
         '<div class="flow-top">' +
-        fi('Sisa awal', h.sisa_awal) + '<div class="flow-op">+</div>' + fi('TBS diterima', h.diterima) + '<div class="flow-op">=</div>' + fi('TBS tersedia', h.tersedia) +
+        (adaSisa ? fi('Sisa awal', h.sisa_awal) + '<div class="flow-op">+</div>' + fi('TBS diterima', h.diterima) + '<div class="flow-op">=</div>' + fi('TBS tersedia', h.tersedia)
+          : fi('TBS diterima', h.diterima) + '<div class="flow-op hide-sm"></div>' + fi('TBS diolah', h.tbs_olah)) +
         '</div>' +
-        '<div class="flow-bar" role="img" aria-label="TBS tersedia ' + ton(h.tersedia) + ' ton: diolah ' + ton(h.tbs_olah) + ' ton, sisa ' + ton(h.sisa_akhir) + ' ton">' +
+        (adaSisa ? '<div class="flow-bar" role="img" aria-label="TBS tersedia ' + ton(h.tersedia) + ' ton: diolah ' + ton(h.tbs_olah) + ' ton, sisa ' + ton(h.sisa_akhir) + ' ton">' +
         '<span class="olah" style="flex:0 0 ' + olahW + '%" data-tip="Diolah ' + kg(h.tbs_olah) + ' kg">Diolah ' + ton(h.tbs_olah) + ' t</span>' +
-        '<span class="sisa" style="flex:1 1 0" data-tip="Sisa akhir (restan) ' + kg(h.sisa_akhir) + ' kg">Sisa akhir ' + ton(h.sisa_akhir) + ' t</span></div>' +
-        '<div class="muted" style="font-size:.85rem">Sisa TBS hitung fisik ' + kg(h.sisa_real) + ' kg, selisih terhadap buku ' + kg(h.selisih_tbs) + ' kg.</div>' +
+        '<span class="sisa" style="flex:1 1 0" data-tip="Sisa akhir (restan) ' + kg(h.sisa_akhir) + ' kg">Sisa akhir ' + ton(h.sisa_akhir) + ' t</span></div>'
+          : '<p class="muted" style="font-size:.85rem;margin-top:10px">Sisa TBS belum terbaca: baris "Awal" di sheet Real Produksi masih berisi #REF!. Lihat halaman Validasi.</p>') +
+        (n(h.sisa_real) !== null ? '<div class="muted" style="font-size:.85rem">Sisa TBS hitung fisik ' + kg(h.sisa_real) + ' kg, selisih terhadap buku ' + kg(h.selisih_tbs) + ' kg.</div>' : '') +
         '<div class="flow-out">' +
         outChip('var(--s-cpo)', 'CPO', kg(h.cpo) + ' kg', 'rendemen ' + pct(rcpo)) +
         outChip('var(--s-pk)', 'PK', kg(h.pk) + ' kg', 'rendemen ' + pct(rpk)) +
@@ -199,12 +211,15 @@
       kpi('Produksi PK', kg(h.pk), 'kg', 's.d. hari ini <b>' + kg(pkSd) + ' kg</b>') +
       kpi('Rendemen CPO', pct(rcpo), '', 's.d. hari ini <b>' + pct(rend(cpoSd, olahSd)) + '</b>' + delta(rcpo, set.target_rend_cpo)) +
       kpi('Rendemen PK', pct(rpk), '', 's.d. hari ini <b>' + pct(rend(pkSd, olahSd)) + '</b>' + delta(rpk, set.target_rend_pk)) +
-      kpi('Kapasitas olah', fmt(kap, 1), 'ton/jam', set.kapasitas ? 'utilitas <b>' + pct(kap / set.kapasitas * 100, 0) + '</b> dari ' + fmt(set.kapasitas) + ' ton/jam' : 's.d. hari ini <b>' + fmt(kapSd, 1) + ' ton/jam</b>') +
-      kpi('Stagnasi', fmt(h.jam_stagnasi), 'jam', 'jam olah <b>' + fmt(h.jam_olah) + '</b>, s.d. hari ini <b>' + fmt(stagSd) + ' jam</b>') +
+      (adaJam
+        ? kpi('Kapasitas olah', fmt(kap, 1), 'ton/jam', set.kapasitas ? 'utilitas <b>' + pct(kap / set.kapasitas * 100, 0) + '</b> dari ' + fmt(set.kapasitas) + ' ton/jam' : 's.d. hari ini <b>' + fmt(kapSd, 1) + ' ton/jam</b>') +
+          kpi('Stagnasi', fmt(h.jam_stagnasi), 'jam', 'jam olah <b>' + fmt(h.jam_olah) + '</b>, s.d. hari ini <b>' + fmt(stagSd) + ' jam</b>')
+        : kpi('Sisa TBS akhir', kg(h.sisa_akhir), 'kg', n(h.sisa_akhir) === null ? 'menunggu angka sisa awal' : 'restan di pabrik') +
+          kpi('Stok kernel', kg(h.pk_buku), 'kg', n(h.pk_buku) === null ? 'menunggu angka stok awal' : '')) +
       kpi('CPO dikirim', kg(kirimProduk(kirimHi, 'CPO')), 'kg', 's.d. hari ini <b>' + kg(kirimProduk(kirim, 'CPO')) + ' kg</b>') +
       kpi('PK dikirim', kg(kirimProduk(kirimHi, 'PK')), 'kg', 's.d. hari ini <b>' + kg(kirimProduk(kirim, 'PK')) + ' kg</b>') +
       kpi('Tankos diproduksi', kg(tkHi.produksi), 'kg', 's.d. hari ini <b>' + kg(sum(tk, 'produksi')) + ' kg</b>') +
-      kpi('ALB tangki CPO', pct(h.alb_tangki), '', h.cpo_buku ? 'stok CPO buku <b>' + kg(h.cpo_buku) + ' kg</b>' : '') +
+      kpi('ALB CPO', pct(h.alb_tangki), '', n(h.cpo_buku) !== null ? 'stok CPO <b>' + kg(h.cpo_buku) + ' kg</b>' : '') +
       '</div></div>';
 
     html += '<div class="section grid-2">' +
@@ -215,7 +230,7 @@
 
     // Stagnasi 7 hari terakhir
     var st = P.filter(function (r) { return n(r.jam_stagnasi); }).slice(-7).reverse();
-    html += '<div class="section"><h2>Stagnasi terakhir</h2>' + (st.length ?
+    if (adaJam) html += '<div class="section"><h2>Stagnasi terakhir</h2>' + (st.length ?
       '<div class="table-wrap"><table class="data"><thead><tr><th class="l">Tanggal</th><th>Jam olah</th><th>Stagnasi</th><th class="l">Keterangan</th></tr></thead><tbody>' +
       st.map(function (r) { return '<tr' + (r.tanggal === S.hari ? ' class="sel"' : '') + '><td class="l">' + tglPendek(r.tanggal) + '</td><td>' + fmt(r.jam_olah) + '</td><td>' + fmt(r.jam_stagnasi) + ' jam</td><td class="l wrap">' + esc(r.stagnasi_ket) + '</td></tr>'; }).join('') +
       '</tbody></table></div>' : '<p class="empty">Tidak ada stagnasi tercatat bulan ini.</p>') + '</div>';
@@ -236,12 +251,19 @@
   function outChip(color, name, val, sub) { return '<div class="out"><i style="background:' + color + '"></i><span>' + name + '</span><b>' + val + '</b><span class="muted">' + sub + '</span></div>'; }
 
   /* ------------------------------------------------------- PRODUKSI */
+  var URUT_SUMBER = ['INTI SBT (TM)', 'INTI SBT (TBM)', 'INTI SBT', 'INTI LDA', 'KBN LDA', 'AMO I', 'AMO,I', 'AMO II', 'AMO,II', 'PLASMA', 'PLSMA', 'PIHAK III'];
+  /** Nama sumber unik, diurutkan Inti → AMO → Plasma → Pihak III (bukan urutan kemunculan). */
+  function urutSumber(rows) {
+    var u = [];
+    rows.forEach(function (r) { if (u.indexOf(r.sumber) < 0) u.push(r.sumber); });
+    function pos(x) { var i = URUT_SUMBER.indexOf(String(x).toUpperCase()); return i < 0 ? 99 : i; }
+    return u.sort(function (a, b) { return pos(a) - pos(b); });
+  }
   function halProduksi(d) {
     var set = S.meta.setting;
     var P = sd(d.produksi), all = d.produksi;
     var sHi = hi(d.sumber), sSd = sd(d.sumber);
-    var urut = [];
-    d.sumber.forEach(function (r) { if (urut.indexOf(r.sumber) < 0) urut.push(r.sumber); });
+    var urut = urutSumber(d.sumber);
     function baris(nama) {
       var a = sHi.filter(function (r) { return r.sumber === nama; }), b = sSd.filter(function (r) { return r.sumber === nama; });
       return { nama: nama, t: sum(a, 'tbs'), c: sum(a, 'cpo'), p: sum(a, 'pk'), T: sum(b, 'tbs'), C: sum(b, 'cpo'), Pk: sum(b, 'pk') };
@@ -253,6 +275,8 @@
         '</td><td>' + kg(r.T) + '</td><td>' + kg(r.C) + '</td><td>' + pct(rend(r.C, r.T)) + '</td><td>' + kg(r.Pk) + '</td><td>' + pct(rend(r.Pk, r.T)) + '</td></tr>';
     }
 
+    var adaJam = all.some(function (r) { return n(r.jam_olah); });
+    var adaSisa = all.some(function (r) { return n(r.sisa_akhir) !== null; });
     var html = '<div class="page-head"><h1>Produksi</h1><span class="muted">' + tglPanjang(S.hari) + ', akumulasi dari tanggal 1</span></div>';
     html += '<div class="section" style="margin-top:0"><h2>TBS diolah per sumber</h2>' +
       '<div class="table-wrap"><table class="data"><thead><tr><th class="l" rowspan="2">Sumber</th><th colspan="5" class="l">Hari ini</th><th colspan="5" class="l">s.d. hari ini</th></tr>' +
@@ -261,50 +285,54 @@
 
     html += '<div class="section grid-2">' +
       panel('c-masuk', 'TBS diterima dan diolah', 'Kilogram per hari.', legend([['#86b6ef', 'Diterima', 'box'], ['var(--s-tbs)', 'Diolah', 'box']])) +
-      panel('c-jam', 'Jam olah dan stagnasi', 'Jam per hari (total 24 jam).', legend([['var(--s-tbs)', 'Jam olah', 'box'], ['var(--line-strong)', 'Stagnasi', 'box']])) +
+      (adaJam ? panel('c-jam', 'Jam olah dan stagnasi', 'Jam per hari (total 24 jam).', legend([['var(--s-tbs)', 'Jam olah', 'box'], ['var(--line-strong)', 'Stagnasi', 'box']]))
+        : (adaSisa ? panel('c-sisa', 'Sisa TBS akhir hari', 'Kilogram (restan di pabrik).')
+          : '<div class="panel"><h3>Sisa TBS akhir hari</h3><p class="hint">Kilogram (restan di pabrik).</p><p class="empty" style="margin-top:12px">Belum bisa ditampilkan: baris "Awal" kolom TBS SISA di sheet Real Produksi masih berisi #REF!. Ketik angka sisa TBS awal bulan di sel itu, lalu sinkron ulang.</p></div>')) +
       panel('c-rcpo', 'Rendemen CPO', 'Persen per hari' + (set.target_rend_cpo ? ', garis putus-putus = target.' : '.')) +
       panel('c-rpk', 'Rendemen PK', 'Persen per hari' + (set.target_rend_pk ? ', garis putus-putus = target.' : '.')) +
       '</div>';
-    html += '<div class="section">' + panel('c-kap', 'Kapasitas olah', 'Ton TBS per jam olah' + (set.kapasitas ? '; garis putus-putus = kapasitas terpasang ' + fmt(set.kapasitas) + ' ton/jam.' : '. Isi KAPASITAS_TERPASANG_TON_JAM di sheet Setting untuk melihat utilitas.')) + '</div>';
+    if (adaJam) html += '<div class="section">' + panel('c-kap', 'Kapasitas olah', 'Ton TBS per jam olah' + (set.kapasitas ? '; garis putus-putus = kapasitas terpasang ' + fmt(set.kapasitas) + ' ton/jam.' : '. Isi KAPASITAS_TERPASANG_TON_JAM di sheet Setting untuk melihat utilitas.')) + '</div>';
 
     // TBS diterima per sumber
-    var tHi = hi(d.terima), tSd = sd(d.terima), tUrut = [];
-    d.terima.forEach(function (r) { if (tUrut.indexOf(r.sumber) < 0) tUrut.push(r.sumber); });
+    var tHi = hi(d.terima), tSd = sd(d.terima), tUrut = urutSumber(d.terima);
     var trm = tUrut.map(function (s) { return { s: s, a: sum(tHi.filter(function (r) { return r.sumber === s; }), 'kg'), b: sum(tSd.filter(function (r) { return r.sumber === s; }), 'kg') }; })
       .filter(function (r) { return r.b; });
     // Shift
     var shHi = hi(d.shift), shSd = sd(d.shift), shNo = [];
     d.shift.forEach(function (r) { if (shNo.indexOf(r.shift) < 0) shNo.push(r.shift); });
     shNo.sort();
-    html += '<div class="section grid-2"><div><h2>TBS diterima per sumber</h2><div class="table-wrap"><table class="data"><thead><tr><th class="l">Sumber</th><th>Hari ini (kg)</th><th>s.d. hari ini (kg)</th></tr></thead><tbody>' +
+    var adaShift = d.shift.length > 0;
+    html += '<div class="section ' + (adaShift ? 'grid-2' : '') + '"><div><h2>TBS diterima per sumber</h2><div class="table-wrap"><table class="data"><thead><tr><th class="l">Sumber</th><th>Hari ini (kg)</th><th>s.d. hari ini (kg)</th></tr></thead><tbody>' +
       trm.map(function (r) { return '<tr><td class="l">' + esc(r.s) + '</td><td>' + kg(r.a) + '</td><td>' + kg(r.b) + '</td></tr>'; }).join('') +
       '<tr class="total"><td class="l">Jumlah</td><td>' + kg(sum(trm, 'a')) + '</td><td>' + kg(sum(trm, 'b')) + '</td></tr></tbody></table></div></div>' +
-      '<div><h2>TBS diolah real per shift</h2><div class="table-wrap"><table class="data"><thead><tr><th class="l">Shift</th><th>Hari ini (kg)</th><th>Lori</th><th>s.d. hari ini (kg)</th><th>Lori</th></tr></thead><tbody>' +
+      (!adaShift ? '</div>' : '<div><h2>TBS diolah real per shift</h2><div class="table-wrap"><table class="data"><thead><tr><th class="l">Shift</th><th>Hari ini (kg)</th><th>Lori</th><th>s.d. hari ini (kg)</th><th>Lori</th></tr></thead><tbody>' +
       shNo.map(function (no) {
         var a = shHi.filter(function (r) { return r.shift === no; }), b = shSd.filter(function (r) { return r.shift === no; });
         return '<tr><td class="l">Shift ' + no + '</td><td>' + kg(sum(a, 'tbs')) + '</td><td>' + fmt(sum(a, 'lori')) + '</td><td>' + kg(sum(b, 'tbs')) + '</td><td>' + fmt(sum(b, 'lori')) + '</td></tr>';
       }).join('') +
       '<tr class="total"><td class="l">Jumlah</td><td>' + kg(sum(shHi, 'tbs')) + '</td><td>' + fmt(sum(shHi, 'lori')) + '</td><td>' + kg(sum(shSd, 'tbs')) + '</td><td>' + fmt(sum(shSd, 'lori')) + '</td></tr></tbody></table></div>' +
-      '<p class="section-note" style="margin-top:8px">Hitungan real (lori × berat rata-rata) bisa berbeda dengan TBS diolah buku.</p></div></div>';
+      '<p class="section-note" style="margin-top:8px">Hitungan real (lori × berat rata-rata) bisa berbeda dengan TBS diolah buku.</p></div></div>');
 
     // Sisa TBS real per lokasi
     var lok = hi(d.sisa_real);
     var h = hi(d.produksi)[0] || {};
-    html += '<div class="section"><h2>Sisa TBS: buku dan hitung fisik</h2><div class="grid-2"><div class="table-wrap"><table class="data"><thead><tr><th class="l">Lokasi (hari ini)</th><th>kg</th></tr></thead><tbody>' +
+    if (d.sisa_real.length) html += '<div class="section"><h2>Sisa TBS: buku dan hitung fisik</h2><div class="grid-2"><div class="table-wrap"><table class="data"><thead><tr><th class="l">Lokasi (hari ini)</th><th>kg</th></tr></thead><tbody>' +
       lok.map(function (r) { return '<tr><td class="l">' + esc(r.lokasi) + '</td><td>' + kg(r.kg) + '</td></tr>'; }).join('') +
       '<tr class="total"><td class="l">Sisa real</td><td>' + kg(h.sisa_real) + '</td></tr><tr><td class="l">Sisa buku</td><td>' + kg(h.sisa_akhir) + '</td></tr><tr class="total"><td class="l">Selisih</td><td>' + kg(h.selisih_tbs) + '</td></tr></tbody></table></div>' +
       panel('c-selisih', 'Selisih sisa TBS per hari', 'Sisa real dikurangi sisa buku (kg). Di bawah nol berarti fisik lebih sedikit dari buku.') + '</div></div>';
 
     // Tabel harian lengkap
-    html += '<div class="section"><h2>Rincian harian</h2><div class="table-wrap"><table class="data"><thead><tr><th class="l">Tanggal</th><th>Diterima</th><th>Diolah</th><th>CPO</th><th>Rend. CPO</th><th>PK</th><th>Rend. PK</th><th>Jam olah</th><th>Stagnasi</th><th>Ton/jam</th><th>Sisa akhir</th><th>ALB</th></tr></thead><tbody>' +
+    html += '<div class="section"><h2>Rincian harian</h2><div class="table-wrap"><table class="data"><thead><tr><th class="l">Tanggal</th><th>Diterima</th><th>Diolah</th><th>CPO</th><th>Rend. CPO</th><th>PK</th><th>Rend. PK</th>' + (adaJam ? '<th>Jam olah</th><th>Stagnasi</th><th>Ton/jam</th>' : '') + '<th>Sisa akhir</th><th>ALB</th></tr></thead><tbody>' +
       all.map(function (r) {
         return '<tr' + (r.tanggal === S.hari ? ' class="sel"' : '') + '><td class="l">' + tglPendek(r.tanggal) + '</td><td>' + kg(r.diterima) + '</td><td>' + kg(r.tbs_olah) + '</td><td>' + kg(r.cpo) + '</td><td>' + pct(rend(r.cpo, r.tbs_olah)) +
-          '</td><td>' + kg(r.pk) + '</td><td>' + pct(rend(r.pk, r.tbs_olah)) + '</td><td>' + fmt(r.jam_olah) + '</td><td>' + fmt(r.jam_stagnasi) + '</td><td>' + (n(r.jam_olah) ? fmt(r.tbs_olah / r.jam_olah / 1000, 1) : '–') +
+          '</td><td>' + kg(r.pk) + '</td><td>' + pct(rend(r.pk, r.tbs_olah)) +
+          (adaJam ? '</td><td>' + fmt(r.jam_olah) + '</td><td>' + fmt(r.jam_stagnasi) + '</td><td>' + (n(r.jam_olah) ? fmt(r.tbs_olah / r.jam_olah / 1000, 1) : '–') : '') +
           '</td><td>' + kg(r.sisa_akhir) + '</td><td>' + fmt(r.alb_tangki, 2) + '</td></tr>';
       }).join('') +
       '<tr class="total"><td class="l">Jumlah</td><td>' + kg(sum(all, 'diterima')) + '</td><td>' + kg(sum(all, 'tbs_olah')) + '</td><td>' + kg(sum(all, 'cpo')) + '</td><td>' + pct(rend(sum(all, 'cpo'), sum(all, 'tbs_olah'))) +
-      '</td><td>' + kg(sum(all, 'pk')) + '</td><td>' + pct(rend(sum(all, 'pk'), sum(all, 'tbs_olah'))) + '</td><td>' + fmt(sum(all, 'jam_olah')) + '</td><td>' + fmt(sum(all, 'jam_stagnasi')) + '</td><td>' +
-      (sum(all, 'jam_olah') ? fmt(sum(all, 'tbs_olah') / sum(all, 'jam_olah') / 1000, 1) : '–') + '</td><td></td><td></td></tr></tbody></table></div>' +
+      '</td><td>' + kg(sum(all, 'pk')) + '</td><td>' + pct(rend(sum(all, 'pk'), sum(all, 'tbs_olah'))) +
+      (adaJam ? '</td><td>' + fmt(sum(all, 'jam_olah')) + '</td><td>' + fmt(sum(all, 'jam_stagnasi')) + '</td><td>' +
+        (sum(all, 'jam_olah') ? fmt(sum(all, 'tbs_olah') / sum(all, 'jam_olah') / 1000, 1) : '–') : '') + '</td><td></td><td></td></tr></tbody></table></div>' +
       '<p class="section-note" style="margin-top:8px">Rendemen bulanan dihitung dari total CPO ÷ total TBS diolah, bukan rata-rata rendemen harian.</p></div>';
 
     $('#page').innerHTML = html;
@@ -313,7 +341,8 @@
     barChart('c-masuk', lab, [
       { label: 'Diterima (kg)', data: all.map(function (r) { return r.diterima; }), backgroundColor: '#86b6ef' },
       { label: 'Diolah (kg)', data: all.map(function (r) { return r.tbs_olah; }), backgroundColor: cssVar('--s-tbs') }]);
-    barChart('c-jam', lab, [
+    if (!adaJam && adaSisa) barChart('c-sisa', lab, [{ label: 'Sisa TBS (kg)', data: all.map(function (r) { return r.sisa_akhir; }), backgroundColor: alpha(cssVar('--s-tbs'), .6) }]);
+    if (adaJam) barChart('c-jam', lab, [
       { label: 'Jam olah', data: all.map(function (r) { return r.jam_olah; }), backgroundColor: cssVar('--s-tbs') },
       { label: 'Stagnasi', data: all.map(function (r) { return r.jam_stagnasi; }), backgroundColor: cssVar('--line-strong') }], { stacked: true, max: 24 });
     var d1 = [{ label: 'Rendemen CPO (%)', data: all.map(function (r) { return n(r.tbs_olah) ? rend(r.cpo, r.tbs_olah) : null; }), borderColor: cssVar('--s-cpo') }];
@@ -324,13 +353,17 @@
     lineChart('c-rpk', lab, d2, { pct: true });
     var d3 = [{ label: 'Ton/jam', data: all.map(function (r) { return n(r.jam_olah) ? r.tbs_olah / r.jam_olah / 1000 : null; }), borderColor: cssVar('--s-tbs') }];
     if (set.kapasitas) d3.push(targetDs(set.kapasitas, all.length, 'Kapasitas terpasang'));
-    lineChart('c-kap', lab, d3, { dec: 1 });
-    barChart('c-selisih', lab, [{ label: 'Selisih (kg)', data: all.map(function (r) { return r.selisih_tbs; }),
+    if (adaJam) lineChart('c-kap', lab, d3, { dec: 1 });
+    if (d.sisa_real.length) barChart('c-selisih', lab, [{ label: 'Selisih (kg)', data: all.map(function (r) { return r.selisih_tbs; }),
       backgroundColor: all.map(function (r) { return (r.selisih_tbs || 0) < 0 ? alpha(cssVar('--crit'), .75) : alpha(cssVar('--s-tbs'), .75); }) }]);
   }
 
   /* ----------------------------------------------------- BY PRODUCT */
   var BP = [['TANKOS', 'Tankos'], ['CANGKANG', 'Cangkang'], ['FIBER', 'Fiber'], ['SOLID', 'Solid'], ['ABU JANJANG', 'Abu janjang'], ['ABU BOILER', 'Abu boiler']];
+  // Tujuan keluar by product. Hanya kolom yang ada isinya yang ditampilkan, karena tiap laporan berbeda.
+  var BP_KELUAR = [['dijual', 'Dijual (dikirim)', '--s-tbs'], ['kbn_inti', 'Ke kebun inti', '--s-cpo'], ['pls_tu', 'Ke plasma / TU', '--s-pk'],
+    ['waduk', 'Ke waduk', '#eda100'], ['dibakar', 'Dibakar (bahan bakar)', '--s-4']];
+  function warna(w) { return w.charAt(0) === '#' ? w : cssVar(w); }
   function halByproduct(d) {
     var html = '<div class="page-head"><h1>By product</h1><span class="muted">' + tglPanjang(S.hari) + ', akumulasi dari tanggal 1</span></div>';
     html += '<div class="chips" role="group" aria-label="Jenis by product">' + BP.map(function (b) {
@@ -340,46 +373,53 @@
     var rows = d.byproduct.filter(function (r) { return r.jenis === S.bp; });
     if (!rows.length) {
       html += '<div class="empty"><b>Belum ada data ' + nama.toLowerCase() + ' untuk ' + namaBulan(S.bulan) + '.</b><br>' +
-        'Masukkan file laporan ' + nama.toLowerCase() + ' (format Google Spreadsheet) ke folder data. Jika formatnya berbeda dari laporan tankos, parser perlu ditambah sekali untuk format tersebut.</div>';
+        'Pastikan file laporan harian ' + nama.toLowerCase() + ' (format Google Spreadsheet) ada di folder data dan punya tab untuk bulan ini.</div>';
       $('#page').innerHTML = html; bindChips(); return;
     }
     var R = sd(rows), h = hi(rows)[0] || {};
     var olah = sum(R, 'tbs_olah'), prod = sum(R, 'produksi');
     var stokAkhir = R.length ? R[R.length - 1].stok : null;
+    var keluar = BP_KELUAR.filter(function (k) { return rows.some(function (r) { return n(r[k[0]]); }); });
     html += '<div class="kpis">' +
       kpi('Produksi ' + nama.toLowerCase(), kg(prod), 'kg', 'hari ini <b>' + kg(h.produksi) + ' kg</b>') +
       kpi('Terhadap TBS diolah', pct(rend(prod, olah)), '', 'hari ini <b>' + pct(rend(h.produksi, h.tbs_olah)) + '</b>') +
-      kpi('Dijual (dikirim)', kg(sum(R, 'dijual')), 'kg', 'hari ini <b>' + kg(h.dijual) + ' kg</b>') +
-      kpi('Stok akhir', kg(stokAkhir), 'kg', 'stok awal bulan <b>' + kg(rows[0].stok_awal_bulan) + ' kg</b>') +
-      kpi('Ke kebun inti', kg(sum(R, 'kbn_inti')), 'kg', 'hari ini <b>' + kg(h.kbn_inti) + ' kg</b>') +
-      kpi('Ke plasma / TU', kg(sum(R, 'pls_tu')), 'kg', 'hari ini <b>' + kg(h.pls_tu) + ' kg</b>') +
-      kpi('Ke waduk', kg(sum(R, 'waduk')), 'kg', 'hari ini <b>' + kg(h.waduk) + ' kg</b>') +
-      kpi('Dibakar', kg(sum(R, 'dibakar')), 'kg', 'boiler <b>' + kg(sum(R, 'boiler')) + '</b>, generator <b>' + kg(sum(R, 'generator')) + '</b>') +
+      kpi('Stok akhir', kg(stokAkhir), 'kg', n(rows[0].stok_awal_bulan) !== null ? 'stok awal bulan <b>' + kg(rows[0].stok_awal_bulan) + ' kg</b>' : 'stok awal bulan belum terbaca') +
+      keluar.map(function (k) {
+        var sub = 'hari ini <b>' + kg(h[k[0]]) + ' kg</b>';
+        if (k[0] === 'dibakar' && (sum(R, 'boiler') || sum(R, 'generator'))) sub = 'boiler <b>' + kg(sum(R, 'boiler')) + '</b>, generator <b>' + kg(sum(R, 'generator')) + '</b>';
+        return kpi(k[1], kg(sum(R, k[0])), 'kg', sub);
+      }).join('') +
       '</div>';
     html += '<div class="section grid-2">' +
       panel('c-bp-prod', 'Produksi ' + nama.toLowerCase() + ' per hari', 'Kilogram.') +
-      panel('c-bp-keluar', nama + ' keluar per tujuan', 'Kilogram per hari, ditumpuk.', legend([['var(--s-tbs)', 'Dijual', 'box'], ['var(--s-cpo)', 'Kebun inti', 'box'], ['var(--s-pk)', 'Plasma / TU', 'box'], ['#eda100', 'Waduk', 'box']])) +
+      (keluar.length ? panel('c-bp-keluar', nama + ' keluar per tujuan', 'Kilogram per hari' + (keluar.length > 1 ? ', ditumpuk.' : '.'),
+        legend(keluar.map(function (k) { return [warna(k[2]), k[1], 'box']; })))
+        : panel('c-bp-stok', 'Stok ' + nama.toLowerCase(), 'Kilogram di akhir hari.')) +
       '</div>';
 
     // Rekap tahunan
     var th = S.data[S.bulan].tahunan.byproduct, bulanTh = Object.keys(th).filter(function (k) { return k.split('|')[1] === S.bp; }).sort();
     if (bulanTh.length) {
-      html += '<div class="section"><h2>Rekap ' + S.bulan.slice(0, 4) + '</h2><div class="table-wrap"><table class="data"><thead><tr><th class="l">Bulan</th><th>TBS diolah</th><th>Produksi</th><th>%</th><th>Dijual</th><th>Kebun inti</th><th>Plasma / TU</th><th>Waduk</th><th>Dibakar</th></tr></thead><tbody>' +
+      var kolTh = BP_KELUAR.filter(function (k) { return bulanTh.some(function (b) { return n(th[b][k[0]]); }); });
+      html += '<div class="section"><h2>Rekap ' + S.bulan.slice(0, 4) + '</h2><div class="table-wrap"><table class="data"><thead><tr><th class="l">Bulan</th><th>TBS diolah</th><th>Produksi</th><th>%</th>' +
+        kolTh.map(function (k) { return '<th>' + k[1].replace(' (dikirim)', '').replace(' (bahan bakar)', '') + '</th>'; }).join('') + '</tr></thead><tbody>' +
         bulanTh.map(function (k) {
           var x = th[k], b = k.split('|')[0];
-          return '<tr' + (b === S.bulan ? ' class="sel"' : '') + '><td class="l">' + namaBulan(b) + '</td><td>' + kg(x.tbs_olah) + '</td><td>' + kg(x.produksi) + '</td><td>' + pct(rend(x.produksi, x.tbs_olah)) +
-            '</td><td>' + kg(x.dijual) + '</td><td>' + kg(x.kbn_inti) + '</td><td>' + kg(x.pls_tu) + '</td><td>' + kg(x.waduk) + '</td><td>' + kg(x.dibakar) + '</td></tr>';
+          return '<tr' + (b === S.bulan ? ' class="sel"' : '') + '><td class="l">' + namaBulan(b) + '</td><td>' + kg(x.tbs_olah) + '</td><td>' + kg(x.produksi) + '</td><td>' + pct(rend(x.produksi, x.tbs_olah)) + '</td>' +
+            kolTh.map(function (c) { return '<td>' + kg(x[c[0]]) + '</td>'; }).join('') + '</tr>';
         }).join('') + '</tbody></table></div></div>';
     }
     $('#page').innerHTML = html; bindChips();
     var lab = rows.map(function (r) { return tglPendek(r.tanggal); });
     barChart('c-bp-prod', lab, [{ label: 'Produksi (kg)', data: rows.map(function (r) { return r.produksi; }),
       backgroundColor: rows.map(function (r) { return r.tanggal === S.hari ? cssVar('--s-4') : alpha(cssVar('--s-4'), .45); }) }]);
-    barChart('c-bp-keluar', lab, [
-      { label: 'Dijual', data: rows.map(function (r) { return r.dijual; }), backgroundColor: cssVar('--s-tbs') },
-      { label: 'Kebun inti', data: rows.map(function (r) { return r.kbn_inti; }), backgroundColor: cssVar('--s-cpo') },
-      { label: 'Plasma / TU', data: rows.map(function (r) { return r.pls_tu; }), backgroundColor: cssVar('--s-pk') },
-      { label: 'Waduk', data: rows.map(function (r) { return r.waduk; }), backgroundColor: '#eda100' }], { stacked: true });
+    if (keluar.length) {
+      barChart('c-bp-keluar', lab, keluar.map(function (k) {
+        return { label: k[1], data: rows.map(function (r) { return r[k[0]]; }), backgroundColor: warna(k[2]) };
+      }), { stacked: true });
+    } else {
+      barChart('c-bp-stok', lab, [{ label: 'Stok (kg)', data: rows.map(function (r) { return r.stok; }), backgroundColor: alpha(cssVar('--s-4'), .6) }]);
+    }
   }
   function bindChips() {
     document.querySelectorAll('[data-bp]').forEach(function (b) { b.addEventListener('click', function () { S.bp = b.dataset.bp; render(); }); });
@@ -470,7 +510,7 @@
         '<div class="section"><h2>File yang dibaca</h2><div class="table-wrap"><table class="data"><thead><tr><th class="l">Nama file</th><th class="l">Jenis</th><th class="l">Status</th><th>Baris data</th><th class="l">Terakhir diubah</th></tr></thead><tbody>' +
         v.file.map(function (f) {
           var cls = f.status === 'ok' ? 'st-ok' : f.status === 'dilewati' ? 'st-info' : 'st-err';
-          return '<tr><td class="l">' + esc(f.nama) + '</td><td class="l">' + esc(f.jenis) + '</td><td class="l"><span class="status ' + cls + '">' + esc(f.status) + '</span></td><td>' + fmt(f.baris) + '</td><td class="l">' + esc(f.diperbarui) + '</td></tr>';
+          return '<tr><td class="l">' + esc(f.nama) + '</td><td class="l">' + esc({ TANKOS_HARIAN: 'BY PRODUCT', PRODUKSI: 'PRODUKSI' }[f.jenis] || f.jenis) + '</td><td class="l"><span class="status ' + cls + '">' + esc(f.status) + '</span></td><td>' + fmt(f.baris) + '</td><td class="l">' + esc(f.diperbarui) + '</td></tr>';
         }).join('') + '</tbody></table></div></div>';
       $('#page').innerHTML = html;
       var b = $('#btn-sync');
