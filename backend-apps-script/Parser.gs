@@ -643,6 +643,21 @@ function bbcParsePengirimanTab(values, tabName) {
       baris: r + 1
     });
   }
+  // Koreksi satuan: volume satu pengiriman di bawah 1.000 kg tidak mungkin (satu truk ≥ beberapa ton).
+  // Ini terjadi jika lokal spreadsheet bukan Indonesia: staf mengetik "72.740" tetapi tersimpan 72,74.
+  var dikoreksi = 0;
+  rows.forEach(function (x) {
+    if (x.tonase > 0 && x.tonase < 1000) {
+      x.rspo *= 1000; x.non_rspo *= 1000; x.tonase *= 1000;
+      if (x.sisa_do !== null && Math.abs(x.sisa_do) < 1000) x.sisa_do *= 1000;
+      if (/^\d+(\.\d+)?$/.test(x.keterangan) && +x.keterangan < 1000) x.keterangan = String(Math.round(+x.keterangan * 1000));
+      dikoreksi++;
+    }
+  });
+  if (dikoreksi) {
+    W.push({ level: 'warn', pesan: label + ' (tab "' + tabName + '"): ' + dikoreksi + ' baris volume tersimpan dalam satuan ton (mis. 72,74 untuk 72.740 kg) dan sudah dikali 1.000. ' +
+      'Penyebabnya pengaturan lokal spreadsheet bukan Indonesia: buka File → Setelan → Lokal: Indonesia, lalu ketik ulang angka volume di tab ini.' });
+  }
   return { rows: rows, warnings: W };
 }
 
